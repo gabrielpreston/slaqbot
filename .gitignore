@@ -66,3 +66,6 @@ target/
 
 # environment variables
 .env
+
+# FAQ contents
+faq.json
