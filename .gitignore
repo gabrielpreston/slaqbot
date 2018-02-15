@@ -69,3 +69,6 @@ target/
 
 # FAQ contents
 faq.json
+
+# VENV
+.slaqbot
