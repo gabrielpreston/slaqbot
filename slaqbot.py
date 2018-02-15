@@ -17,7 +17,10 @@ RTM_READ_DELAY = 1  # 1 second delay between reading from RTM
 HELP_COMMAND = "help"
 MENTION_REGEX = "^<@(|[WU].+?)>(.*)"
 QUESTION_REGEX = "(can|how|what)(.*\??)$"
-FILTERED_OUT_TYPES = ["desktop_notification", "user_typing"]
+FILTERED_OUT_TYPES = ["desktop_notification", "user_typing", "user_change", "dnd_updated_user",
+                      "channel_created", "file_comment_added", "file_shared", "member_joined_channel",
+                      "file_public", "reaction_added", "bot_added", "apps_changed", "apps_installed",
+                      "file_change", "commands_changed"]
 DEBUG_MODE = os.environ.get('DEBUG')
 ACTIVE_CONVS = {}
 FAQ_ENTRIES = []
@@ -31,9 +34,11 @@ def parse_slack_events(slack_events):
         If its not found, then this function returns None, None.
     """
     for event in slack_events:
-        # Filter out certain event types from debug printing
+        # Filter out certain event types from processing
         if not event["type"] in FILTERED_OUT_TYPES:
             debug_print(event)
+        else:
+            return None, None
 
         if "thread_ts" in event:
             ts = event["thread_ts"]
