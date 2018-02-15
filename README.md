@@ -1,4 +1,11 @@
-# slack-starterbot
-A simple Python-powered starter Slack bot. Read 
-[the tutorial](https://www.fullstackpython.com/blog/build-first-slack-bot-python.html) 
-for a full overview.
+# SlAQ Bot
+
+Slack Bot for FAQ Support
+
+Startup with:
+
+SLACK_BOT_TOKEN=xoxb-[RETRIEVE FROM SLACK UI] python slaqbot.py
+
+Optional:
+
+DEBUG=true SLACK_BOT_TOKEN=xoxb-[RETRIEVE FROM SLACK UI] python slaqbot.py
