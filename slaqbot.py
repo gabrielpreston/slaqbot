@@ -3,6 +3,9 @@ import time
 import re
 import pprint
 import json
+import logging
+from watchdog.observers import Observer
+from watchdog.events import PatternMatchingEventHandler
 from slackclient import SlackClient
 
 # instantiate Slack client
@@ -22,6 +25,24 @@ DEBUG_MODE = os.environ.get('DEBUG')
 ACTIVE_CONVS = {}
 FAQ_ENTRIES = []
 PARSED_FAQ = {}
+
+
+class MyEventHandler(PatternMatchingEventHandler):
+    def on_moved(self, event):
+        super(MyEventHandler, self).on_moved(event)
+        logging.info("File {} was just moved".format(event.src_path))
+
+    def on_created(self, event):
+        super(MyEventHandler, self).on_created(event)
+        logging.info("File {} was just created".format(event.src_path))
+
+    def on_deleted(self, event):
+        super(MyEventHandler, self).on_deleted(event)
+        logging.info("File {} was just deleted".format(event.src_path))
+
+    def on_modified(self, event):
+        super(MyEventHandler, self).on_modified(event)
+        logging.info("File {} was just modified".format(event.src_path))
 
 
 def parse_slack_events(slack_events):
@@ -166,17 +187,31 @@ if __name__ == "__main__":
         PARSED_FAQ = parse_faq_entries(FAQ_ENTRIES)
     debug_print(PARSED_FAQ)
 
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+    path = './faq.json'
+    watched_dir = os.path.split(path)[0]
+    event_handler = MyEventHandler(patterns=[path])
+    observer = Observer()
+    observer.schedule(event_handler, watched_dir, recursive=True)
+    observer.start()
+
     if slack_client.rtm_connect(with_team_state=False):
         print("SlAQ Bot connected and running!")
         # Read bot's user ID by calling Web API method `auth.test`
         starterbot_id = slack_client.api_call("auth.test")["user_id"]
 
-        while True:
-            command, metadata = parse_slack_events(slack_client.rtm_read())
-            if command:
-                debug_print("Encountered event to process.")
-                add_conversation(metadata["ts"], metadata["user"])
-                handle_command(command, metadata)
-            time.sleep(RTM_READ_DELAY)
+        try:
+            while True:
+                command, metadata = parse_slack_events(slack_client.rtm_read())
+                if command:
+                    debug_print("Encountered event to process.")
+                    add_conversation(metadata["ts"], metadata["user"])
+                    handle_command(command, metadata)
+                time.sleep(RTM_READ_DELAY)
+        except KeyboardInterrupt:
+            observer.stop()
+        observer.join()
     else:
         print("Connection failed. Exception traceback printed above.")
