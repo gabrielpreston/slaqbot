@@ -1,8 +1,10 @@
 import os
 import time
+import calendar
 import re
 import pprint
 import json
+import spacy
 from slackclient import SlackClient
 
 # instantiate Slack client
@@ -10,21 +12,24 @@ slack_client = SlackClient(os.environ.get('SLACK_BOT_TOKEN'))
 # starterbot's user ID in Slack: value is assigned after the bot starts up
 starterbot_id = None
 
+filtered_rtm_types = ['desktop_notification', 'user_typing', 'user_change', 'dnd_updated_user', 'channel_created',
+                      'file_comment_added', 'file_shared', 'member_joined_channel', 'file_public', 'reaction_added',
+                      'bot_added', 'apps_changed', 'apps_installed', 'file_change', 'commands_changed',
+                      'subteam_updated', 'team_join', 'reaction_removed', 'bot_changed']
+active_convs = {}
+faq_entries = []
+parsed_faq = {}
 pp = pprint.PrettyPrinter(indent=4)
+
+nlp = spacy.load('en_core_web_lg')
+# nlp = spacy.load('en')
 
 # constants
 RTM_READ_DELAY = 1  # 1 second delay between reading from RTM
 HELP_COMMAND = "help"
 MENTION_REGEX = "^<@(|[WU].+?)>(.*)"
 QUESTION_REGEX = "(can|how|what)(.*\??)$"
-FILTERED_OUT_TYPES = ["desktop_notification", "user_typing", "user_change", "dnd_updated_user",
-                      "channel_created", "file_comment_added", "file_shared", "member_joined_channel",
-                      "file_public", "reaction_added", "bot_added", "apps_changed", "apps_installed",
-                      "file_change", "commands_changed"]
-DEBUG_MODE = os.environ.get('DEBUG')
-ACTIVE_CONVS = {}
-FAQ_ENTRIES = []
-PARSED_FAQ = {}
+DEBUG_MODE = True if os.environ.get('DEBUG') else False
 
 
 def parse_slack_events(slack_events):
@@ -35,11 +40,14 @@ def parse_slack_events(slack_events):
     """
     for event in slack_events:
         # Filter out certain event types from processing
-        if not event["type"] in FILTERED_OUT_TYPES:
+        #   This might seem backwards, but until I have a more exhaustive list of events we care about,
+        #   this won't let other types of messages slip through the cracks while in debug mode - gabriel@
+        if not event["type"] in filtered_rtm_types:
             debug_print(event)
         else:
             return None, None
 
+        # Keep conversations threaded, so use `thread_ts` over `ts`
         if "thread_ts" in event:
             ts = event["thread_ts"]
         elif "ts" in event:
@@ -48,7 +56,6 @@ def parse_slack_events(slack_events):
             ts = None
 
         # Look for qualifying events
-
         # Standard message to room
         # if event["type"] == "message" and "subtype" not in event:
         if event["type"] == "message" and "subtype" not in event:
@@ -87,9 +94,9 @@ def handle_command(command, metadata):
     # Check command for FAQ keywords
     if is_question(command.lower()):
         debug_print("Found a question")
-        for keyword in PARSED_FAQ.keys():
+        for keyword in parsed_faq.keys():
             if keyword in command.lower():
-                response = PARSED_FAQ[keyword]
+                response = parsed_faq[keyword]
 
     # Sends the response back to the channel
     slack_client.api_call(
@@ -116,12 +123,19 @@ def parse_faq_entries(entries):
     """
     parsed_entries = {}
     for entry in entries:
-        for keyword in entry["keywords"]:
-            if keyword not in parsed_entries:
-                parsed_entries[keyword] = entry["answer"]
+        for question in entry["questions"]:
+            if question not in parsed_entries:
+                parsed_entries[question] = {"answer": entry["answer"], "doc": nlp(question)}
             else:
-                print("Error: Found duplicate keyword '{}' in pre-configured FAQ entries.".format(keyword))
+                print("Error: Found duplicate keyword '{}' in pre-configured FAQ entries.".format(question))
                 exit(1)
+    debug_print(parsed_entries)
+
+    for entry in parsed_entries:
+        for other_entries in parsed_entries:
+            print(entry + " :: " + other_entries)
+            print(parsed_entries[entry]["doc"].similarity(parsed_entries[other_entries]["doc"]))
+        print "\n"
 
     return parsed_entries
 
@@ -133,17 +147,21 @@ def read_faq_from_disk():
     return json.load(open("./faq.json"))
 
 
-def add_conversation(timestamp, user):
+def track_conversation(timestamp, user):
     """
         Track all active conversations to pay attention to, and the users involved
     """
-    if timestamp not in ACTIVE_CONVS:
+    if timestamp not in active_convs:
         debug_print("Adding a new conversation.")
-        ACTIVE_CONVS[timestamp] = [user]
-    elif user not in ACTIVE_CONVS[timestamp]:
+        active_convs[timestamp] = {"users": [user], "start": calendar.timegm(time.gmtime())}
+    elif user not in active_convs[timestamp]["users"]:
         debug_print("Adding a new user to an active conversation.")
-        ACTIVE_CONVS[timestamp].append(user)
-    debug_print(ACTIVE_CONVS)
+        active_convs[timestamp]["users"].append(user)
+
+    debug_print("Updating the last_updated field for the conversation")
+    active_convs[timestamp]["last_updated"] = calendar.timegm(time.gmtime())
+
+    debug_print(active_convs)
 
 
 def is_active_conv(timestamp):
@@ -151,25 +169,37 @@ def is_active_conv(timestamp):
         Checks whether or not a message that was sent belongs to an active conversation that the bot is in
     """
     debug_print("Checking to see if {} is an active conversation.".format(timestamp))
-    debug_print(ACTIVE_CONVS)
-    return timestamp in ACTIVE_CONVS
+    debug_print(active_convs)
+    return timestamp in active_convs
 
 
 def debug_print(debug_data):
     """
         PrettyPrint to stdout if in debug mode
     """
-    if DEBUG_MODE == "true":
+    if DEBUG_MODE:
         pp.pprint(debug_data)
+
+
+def nlp_debug_print(doc):
+    """
+    """
+    print(["NLP dump of command:", doc])
+    print("\nTokens in NLP doc:\n")
+    for token in doc:
+        print(token.text, token.lemma_, token.pos_, token.tag_, token.dep_, token.shape_, token.is_alpha, token.is_stop)
+    print("\nEntities in NLP doc:\n")
+    for ent in doc.ents:
+        print(ent.text, ent.start_char, ent.end_char, ent.label_)
 
 
 if __name__ == "__main__":
     # Parse the FAQ and expand all of the entries
-    if len(FAQ_ENTRIES) == 0:
-        FAQ_ENTRIES = read_faq_from_disk()
-    if len(PARSED_FAQ) == 0:
-        PARSED_FAQ = parse_faq_entries(FAQ_ENTRIES)
-    debug_print(PARSED_FAQ)
+    if len(faq_entries) == 0:
+        faq_entries = read_faq_from_disk()
+    debug_print(faq_entries)
+    if len(parsed_faq) == 0:
+        parsed_faq = parse_faq_entries(faq_entries)
 
     if slack_client.rtm_connect(with_team_state=False):
         print("SlAQ Bot connected and running!")
@@ -180,7 +210,9 @@ if __name__ == "__main__":
             command, metadata = parse_slack_events(slack_client.rtm_read())
             if command:
                 debug_print("Encountered event to process.")
-                add_conversation(metadata["ts"], metadata["user"])
+                track_conversation(metadata["ts"], metadata["user"])
+                doc = nlp(command)
+                nlp_debug_print(doc)
                 handle_command(command, metadata)
             time.sleep(RTM_READ_DELAY)
     else:
