@@ -5,6 +5,7 @@ import re
 import pprint
 import json
 import spacy
+import operator
 from slackclient import SlackClient
 
 # instantiate Slack client
@@ -91,12 +92,21 @@ def handle_command(command, metadata):
     # Finds and executes the given command, filling in response
     response = None
 
-    # Check command for FAQ keywords
+    # Check command against existing FAQ entries
     if is_question(command.lower()):
         debug_print("Found a question")
-        for keyword in parsed_faq.keys():
-            if keyword in command.lower():
-                response = parsed_faq[keyword]
+        command_doc = nlp(command)
+        similarities = {}
+        for entry in parsed_faq:
+            similarities[entry] = command_doc.similarity(parsed_faq[entry]["doc"])
+            # debug_print(command + " :: " + entry)
+            # debug_print(similarities[entry])
+
+        sorted_answers = sorted(similarities.items(), key=operator.itemgetter(1), reverse=True)
+        debug_print("The answers sorted by best match descending:")
+        debug_print(sorted_answers)
+
+        response = "{} ({:.4f} confidence)".format(parsed_faq[sorted_answers[0][0]]["answer"], (sorted_answers[0][1]*100))
 
     # Sends the response back to the channel
     slack_client.api_call(
@@ -130,13 +140,6 @@ def parse_faq_entries(entries):
                 print("Error: Found duplicate keyword '{}' in pre-configured FAQ entries.".format(question))
                 exit(1)
     debug_print(parsed_entries)
-
-    for entry in parsed_entries:
-        for other_entries in parsed_entries:
-            print(entry + " :: " + other_entries)
-            print(parsed_entries[entry]["doc"].similarity(parsed_entries[other_entries]["doc"]))
-        print "\n"
-
     return parsed_entries
 
 
